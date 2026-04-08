@@ -5,6 +5,7 @@ from app.database import engine, Base, SessionLocal
 from app.routers import chat
 from app.models import Agent
 import uuid
+import json
 
 # 创建数据库表
 Base.metadata.create_all(bind=engine)
@@ -18,18 +19,18 @@ def init_default_agent():
         existing = db.query(Agent).filter(Agent.code == "default_analyst").first()
         if not existing:
             default_agent = Agent(
-                id=uuid.uuid4(),
+                id=str(uuid.uuid4()),
                 code="default_analyst",
                 name="通用数据分析师",
                 description="基础数据分析智能体，支持各种数据查询和分析任务",
                 is_builtin=True,
                 is_active=True,
                 persona_system_prompt="你是一位专业的数据分析师，擅长将业务问题转化为 SQL 查询，并对数据进行深入解读。",
-                persona_expertise=["数据查询", "统计分析", "趋势洞察"],
+                persona_expertise=json.dumps(["数据查询", "统计分析", "趋势洞察"]),
                 thinking_style="先理解问题，再生成查询，最后解读结果",
                 output_format="简洁回答，必要时提供数据支撑",
                 output_verbosity="concise",
-                visualization_preferences=["table", "line_chart"]
+                visualization_preferences=json.dumps(["table", "line_chart"])
             )
             db.add(default_agent)
             db.commit()
