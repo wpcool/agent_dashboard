@@ -44,8 +44,8 @@ def create_conversation(
     default_agent_id = None
 
     conversation = Conversation(
-        id=uuid.uuid4(),
-        user_id=uuid.uuid4(),  # TODO: 从认证获取
+        id=str(uuid.uuid4()),
+        user_id=str(uuid.uuid4()),  # TODO: 从认证获取
         current_agent_id=req.agent_id or default_agent_id,
         title=req.title or "新对话"
     )
@@ -59,7 +59,7 @@ def create_conversation(
 
 @router.get("/conversations/{conversation_id}", response_model=ConversationDetailResponse)
 def get_conversation(
-    conversation_id: uuid.UUID,
+    conversation_id: str,
     db: Session = Depends(get_db)
 ):
     """获取对话详情"""
@@ -98,15 +98,15 @@ async def chat(
             raise HTTPException(status_code=404, detail="对话不存在")
     else:
         conversation = Conversation(
-            id=uuid.uuid4(),
-            user_id=uuid.uuid4(),
+            id=str(uuid.uuid4()),
+            user_id=str(uuid.uuid4()),
             title=req.message[:20] + "..."
         )
         db.add(conversation)
 
     # 保存用户消息
     user_message = Message(
-        id=uuid.uuid4(),
+        id=str(uuid.uuid4()),
         conversation_id=conversation.id,
         role="user",
         content=req.message
@@ -123,7 +123,7 @@ async def chat(
     needs_clarify, clarify_hint = accuracy_guard.needs_clarification(req.message)
     if needs_clarify:
         assistant_message = Message(
-            id=uuid.uuid4(),
+            id=str(uuid.uuid4()),
             conversation_id=conversation.id,
             role="assistant",
             content=f"我需要确认一下：{clarify_hint}",
@@ -157,7 +157,7 @@ async def chat(
     if not data_source:
         # 没有数据源，返回提示
         assistant_message = Message(
-            id=uuid.uuid4(),
+            id=str(uuid.uuid4()),
             conversation_id=conversation.id,
             role="assistant",
             content="请先配置数据源。"
@@ -229,7 +229,7 @@ async def chat(
     }
 
     assistant_message = Message(
-        id=uuid.uuid4(),
+        id=str(uuid.uuid4()),
         conversation_id=conversation.id,
         role="assistant",
         content=explanation,
@@ -275,7 +275,7 @@ def create_data_source(
     encrypted_password = encrypt_password(req.password)
 
     data_source = DataSource(
-        id=uuid.uuid4(),
+        id=str(uuid.uuid4()),
         name=req.name,
         type=req.type,
         host=req.host,
@@ -304,7 +304,7 @@ def list_data_sources(
 
 @router.get("/data-sources/{source_id}", response_model=DataSourceResponse)
 def get_data_source(
-    source_id: uuid.UUID,
+    source_id: str,
     db: Session = Depends(get_db)
 ):
     """获取数据源详情"""
@@ -321,7 +321,7 @@ def get_data_source(
 
 @router.post("/data-sources/{source_id}/sync-schema")
 def sync_data_source_schema(
-    source_id: uuid.UUID,
+    source_id: str,
     db: Session = Depends(get_db)
 ):
     """同步数据源 Schema"""
@@ -359,7 +359,7 @@ def sync_data_source_schema(
 
 @router.delete("/data-sources/{source_id}")
 def delete_data_source(
-    source_id: uuid.UUID,
+    source_id: str,
     db: Session = Depends(get_db)
 ):
     """删除数据源（软删除）"""
