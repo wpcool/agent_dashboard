@@ -3,9 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base, SessionLocal
 from app.routers import chat
-from app.models import Agent
+from app.models import Agent, DataSource
 import uuid
 import json
+import os
 
 # 创建数据库表
 Base.metadata.create_all(bind=engine)
@@ -41,7 +42,51 @@ def init_default_agent():
         db.close()
 
 
+# 初始化示例数据源
+def init_sample_data_source():
+    from app.services.sample_data import generate_sample_database, get_sample_schema
+
+    db = SessionLocal()
+    try:
+        # 检查是否已存在示例数据源
+        existing = db.query(DataSource).filter(DataSource.name == "示例销售数据").first()
+        if not existing:
+            # 生成示例数据库
+            sample_db_path = os.path.join(os.path.dirname(__file__), "..", "sample_data.db")
+            sample_db_path = os.path.abspath(sample_db_path)
+
+            if not os.path.exists(sample_db_path):
+                generate_sample_database(sample_db_path)
+                print(f"Sample database created at: {sample_db_path}")
+
+            # 创建数据源记录
+            sample_schema = get_sample_schema()
+            data_source = DataSource(
+                id=str(uuid.uuid4()),
+                name="示例销售数据",
+                type="sqlite",
+                host=sample_db_path,
+                port=0,
+                database_name="sample_data",
+                username="",
+                password_encrypted="",
+                connection_options={"is_sample": True},
+                schema_cache=sample_schema,
+                is_active=True
+            )
+            db.add(data_source)
+            db.commit()
+            print("Sample data source created")
+    except Exception as e:
+        print(f"Init sample data source error: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        db.close()
+
+
 init_default_agent()
+init_sample_data_source()
 
 app = FastAPI(
     title="AskTable AI API",

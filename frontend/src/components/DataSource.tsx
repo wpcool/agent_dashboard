@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { api } from '../api/client';
 
 interface DataSourceManagerProps {
   onBack?: () => void;
@@ -13,20 +14,10 @@ interface DataSourceItem {
   columns: number;
   updatedAt: string;
   status: 'connected' | 'error' | 'syncing';
+  schema_cache?: any;
 }
 
-const mockDataSources: DataSourceItem[] = [
-  {
-    id: '1',
-    name: '商品进销存',
-    type: 'excel',
-    description: '记录商品进货、销售及库存明细的数据表',
-    tables: 1,
-    columns: 172,
-    updatedAt: '大约 4 小时前',
-    status: 'connected',
-  },
-];
+const mockDataSources: DataSourceItem[] = [];
 
 const fileSources = [
   { id: 'excel', name: 'Excel / CSV', icon: '📊', extensions: '.xlsx / .xls / .csv' },
@@ -48,6 +39,44 @@ const dbSources = [
 export const DataSourceManager: React.FC<DataSourceManagerProps> = ({ onBack: _onBack }) => {
   const [view, setView] = useState<'list' | 'add' | 'config'>('list');
   const [selectedType, setSelectedType] = useState<string | null>(null);
+  const [dataSources, setDataSources] = useState<DataSourceItem[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  // 加载数据源列表
+  useEffect(() => {
+    if (view === 'list') {
+      fetchDataSources();
+    }
+  }, [view]);
+
+  const fetchDataSources = async () => {
+    setLoading(true);
+    try {
+      const response = await api.get('/api/v1/data-sources');
+      // 转换后端数据格式
+      const formatted = response.data.map((ds: any) => ({
+        id: ds.id,
+        name: ds.name,
+        type: ds.type,
+        description: ds.name === '示例销售数据'
+          ? '包含商品、订单、客户等销售演示数据'
+          : '自定义数据源',
+        tables: ds.schema_cache?.tables?.length || 0,
+        columns: ds.schema_cache?.tables?.reduce((acc: number, t: any) => acc + (t.columns?.length || 0), 0) || 0,
+        updatedAt: ds.schema_cache_updated_at
+          ? new Date(ds.schema_cache_updated_at).toLocaleString('zh-CN')
+          : '刚刚',
+        status: 'connected' as const,
+        schema_cache: ds.schema_cache,
+      }));
+      setDataSources(formatted);
+    } catch (error) {
+      console.error('Failed to fetch data sources:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const [config, setConfig] = useState({
     host: '',
     port: '',
@@ -272,7 +301,11 @@ export const DataSourceManager: React.FC<DataSourceManagerProps> = ({ onBack: _o
           </button>
         </div>
 
-        {mockDataSources.length === 0 ? (
+        {loading ? (
+          <div className="flex items-center justify-center h-64">
+            <div className="text-gray-400">加载中...</div>
+          </div>
+        ) : dataSources.length === 0 ? (
           <div className="bg-white rounded-xl p-12 text-center border border-gray-100">
             <div className="text-6xl mb-4">🗄️</div>
             <h3 className="text-lg font-medium text-gray-800 mb-2">还没有数据源</h3>
@@ -286,7 +319,7 @@ export const DataSourceManager: React.FC<DataSourceManagerProps> = ({ onBack: _o
           </div>
         ) : (
           <div className="space-y-4">
-            {mockDataSources.map((source) => (
+            {dataSources.map((source) => (
               <div
                 key={source.id}
                 className="bg-white rounded-xl p-6 border border-gray-100 hover:shadow-md transition-shadow"

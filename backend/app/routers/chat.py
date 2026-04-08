@@ -2,6 +2,7 @@ import uuid
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import create_engine, text
 
 from app.database import get_db
 from app.models import Conversation, Message, DataSource
@@ -16,6 +17,7 @@ from app.services.query_executor import QueryExecutor
 from app.services.accuracy_guard import AccuracyGuard
 from cryptography.fernet import Fernet
 import os
+import time
 
 router = APIRouter()
 
@@ -190,9 +192,37 @@ async def chat(
 
     if sql_result.sql and not sql_result.needs_verification:
         try:
-            executor = QueryExecutor(db)
-            query_result = executor.execute(sql_result.sql)
-            results = query_result.rows
+            # 判断数据源类型，示例数据使用 SQLite 文件直接查询
+            if data_source.type == 'sqlite' and data_source.connection_options.get('is_sample'):
+                # 直接连接示例 SQLite 数据库执行查询
+                sample_engine = create_engine(f"sqlite:///{data_source.host}")
+                with sample_engine.connect() as conn:
+                    # 安全检查
+                    upper_sql = sql_result.sql.upper().strip()
+                    if not upper_sql.startswith('SELECT'):
+                        raise ValueError("不安全的 SQL：只允许 SELECT 查询")
+
+                    start_time = time.time()
+                    result = conn.execute(text(sql_result.sql))
+                    columns = list(result.keys())
+                    rows = []
+                    for row in result.fetchall():
+                        rows.append(dict(zip(columns, row)))
+                    execution_time = int((time.time() - start_time) * 1000)
+
+                    query_result = type('QueryResult', (), {
+                        'columns': columns,
+                        'rows': rows,
+                        'total_rows': len(rows),
+                        'execution_time_ms': execution_time,
+                        'sql': sql_result.sql
+                    })()
+                    results = rows
+            else:
+                # 使用 QueryExecutor 执行（其他数据源）
+                executor = QueryExecutor(db)
+                query_result = executor.execute(sql_result.sql)
+                results = query_result.rows
 
             # 结果一致性检查
             consistency = accuracy_guard.verify_result_consistency(
