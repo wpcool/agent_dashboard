@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base, SessionLocal
-from app.routers import chat
+from app.routers import chat, upload
 from app.models import Agent, DataSource
 import uuid
 import json
@@ -105,6 +105,7 @@ app.add_middleware(
 
 # 注册路由
 app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
+app.include_router(upload.router, prefix="/api/v1", tags=["upload"])
 
 
 @app.get("/health")

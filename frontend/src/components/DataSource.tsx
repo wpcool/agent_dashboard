@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../api/client';
+import { FileUploader } from './FileUploader';
 
 interface DataSourceManagerProps {
   onBack?: () => void;
@@ -36,7 +37,7 @@ const dbSources = [
 ];
 
 export const DataSourceManager: React.FC<DataSourceManagerProps> = ({ onBack: _onBack }) => {
-  const [view, setView] = useState<'list' | 'add' | 'config'>('list');
+  const [view, setView] = useState<'list' | 'add' | 'config' | 'upload'>('list');
   const [selectedType, setSelectedType] = useState<string | null>(null);
   const [dataSources, setDataSources] = useState<DataSourceItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -117,7 +118,13 @@ export const DataSourceManager: React.FC<DataSourceManagerProps> = ({ onBack: _o
               {fileSources.map((source) => (
                 <button
                   key={source.id}
-                  onClick={() => setSelectedType(source.id)}
+                  onClick={() => {
+                    if (source.id === 'excel') {
+                      setView('upload');
+                    } else {
+                      setSelectedType(source.id);
+                    }
+                  }}
                   className={`p-6 rounded-xl border-2 text-center transition-all ${
                     selectedType === source.id
                       ? 'border-blue-500 bg-blue-50'
@@ -276,6 +283,54 @@ export const DataSourceManager: React.FC<DataSourceManagerProps> = ({ onBack: _o
                 测试连接
               </button>
             </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Upload view
+  if (view === 'upload') {
+    return (
+      <div className="flex-1 overflow-y-auto p-8">
+        <div className="max-w-4xl mx-auto">
+          {/* Steps */}
+          <div className="flex items-center justify-center mb-8">
+            <div className="flex items-center gap-8">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-green-500 text-white rounded-full flex items-center justify-center text-sm font-medium">✓</div>
+                <span className="text-green-600 font-medium">选择类型</span>
+              </div>
+              <div className="w-16 h-px bg-blue-200" />
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-blue-500 text-white rounded-full flex items-center justify-center text-sm font-medium">2</div>
+                <span className="text-blue-600 font-medium">上传文件</span>
+              </div>
+              <div className="w-16 h-px bg-gray-200" />
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-gray-200 text-gray-500 rounded-full flex items-center justify-center text-sm font-medium">3</div>
+                <span className="text-gray-400">完成</span>
+              </div>
+            </div>
+          </div>
+
+          <FileUploader
+            onUploadSuccess={() => {
+              fetchDataSources();
+              setTimeout(() => {
+                setView('list');
+              }, 1500);
+            }}
+            onCancel={() => setView('add')}
+          />
+
+          <div className="mt-8 flex justify-center">
+            <button
+              onClick={() => setView('add')}
+              className="px-6 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+            >
+              ← 返回选择类型
+            </button>
           </div>
         </div>
       </div>
