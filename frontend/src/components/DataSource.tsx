@@ -17,7 +17,6 @@ interface DataSourceItem {
   schema_cache?: any;
 }
 
-const mockDataSources: DataSourceItem[] = [];
 
 const fileSources = [
   { id: 'excel', name: 'Excel / CSV', icon: '📊', extensions: '.xlsx / .xls / .csv' },
