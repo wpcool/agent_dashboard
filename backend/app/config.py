@@ -3,7 +3,7 @@ from functools import lru_cache
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str = "postgresql://asktable:asktable@localhost:5432/asktable"
+    DATABASE_URL: str = "sqlite:///./asktable.db"
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # AI Provider: anthropic, qwen, openai
