@@ -28,6 +28,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., description="用户消息")
     conversation_id: Optional[UUID] = Field(None, description="对话 ID，新建对话时为空")
     agent_id: Optional[UUID] = Field(None, description="智能体 ID")
+    data_source_id: Optional[str] = Field(None, description="数据源 ID，不指定则使用默认数据源")
 
 
 class ChatResponse(BaseModel):

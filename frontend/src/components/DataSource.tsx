@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../api/client';
 import { FileUploader } from './FileUploader';
+import { Trash2, MessageSquare, MoreVertical } from 'lucide-react';
 
 interface DataSourceManagerProps {
   onBack?: () => void;
@@ -84,6 +85,26 @@ export const DataSourceManager: React.FC<DataSourceManagerProps> = ({ onBack: _o
     username: '',
     password: '',
   });
+
+  // 删除相关状态
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
+
+  // 删除数据源
+  const handleDelete = async (sourceId: string) => {
+    setDeletingId(sourceId);
+    try {
+      await api.delete(`/api/v1/data-sources/${sourceId}`);
+      // 刷新列表
+      await fetchDataSources();
+      setShowDeleteConfirm(null);
+    } catch (error) {
+      console.error('Failed to delete data source:', error);
+      alert('删除失败，请重试');
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   if (view === 'add') {
     return (
@@ -340,6 +361,40 @@ export const DataSourceManager: React.FC<DataSourceManagerProps> = ({ onBack: _o
   // List view
   return (
     <div className="flex-1 overflow-y-auto p-8">
+      {/* 删除确认对话框 */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 max-w-sm w-full mx-4">
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">确认删除</h3>
+            <p className="text-gray-600 mb-6">
+              确定要删除数据源"{dataSources.find(s => s.id === showDeleteConfirm)?.name}"吗？此操作不可恢复。
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowDeleteConfirm(null)}
+                className="flex-1 px-4 py-2 border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50"
+                disabled={deletingId === showDeleteConfirm}
+              >
+                取消
+              </button>
+              <button
+                onClick={() => handleDelete(showDeleteConfirm)}
+                disabled={deletingId === showDeleteConfirm}
+                className="flex-1 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {deletingId === showDeleteConfirm ? (
+                  <>
+                    <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    删除中...
+                  </>
+                ) : (
+                  '确认删除'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="max-w-4xl">
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -404,15 +459,12 @@ export const DataSourceManager: React.FC<DataSourceManagerProps> = ({ onBack: _o
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <button className="p-2 text-gray-400 hover:text-gray-600">
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                      </svg>
-                    </button>
-                    <button className="p-2 text-gray-400 hover:text-gray-600">
-                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                        <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
-                      </svg>
+                    <button
+                      className="p-2 text-gray-400 hover:text-red-600 transition-colors"
+                      onClick={() => setShowDeleteConfirm(source.id)}
+                      title="删除数据源"
+                    >
+                      <Trash2 className="w-5 h-5" />
                     </button>
                   </div>
                 </div>

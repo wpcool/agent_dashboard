@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 
 interface WelcomeProps {
-  onStartChat: (agentId?: string) => void;
+  onStartChat: (agentId?: string, initialMessage?: string) => void;
   onViewAgents: () => void;
 }
 
@@ -60,8 +60,7 @@ const suggestedAgents = [
 ];
 
 export const Welcome: React.FC<WelcomeProps> = ({ onStartChat, onViewAgents }) => {
-  const [inputMode, setInputMode] = useState<'voice' | 'text'>('voice');
-  const [isRecording, setIsRecording] = useState(false);
+  const [inputValue, setInputValue] = useState('');
 
   return (
     <div className="flex-1 overflow-y-auto p-8">
@@ -104,65 +103,35 @@ export const Welcome: React.FC<WelcomeProps> = ({ onStartChat, onViewAgents }) =
           ))}
         </div>
 
-        {/* Voice/Text Input */}
+        {/* Text Input */}
         <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-100 mb-10">
-          {inputMode === 'voice' ? (
-            <div className="text-center">
-              <p className="text-gray-500 mb-6">按住空格，语音输入</p>
-              <button
-                onMouseDown={() => setIsRecording(true)}
-                onMouseUp={() => setIsRecording(false)}
-                onMouseLeave={() => setIsRecording(false)}
-                className="relative w-20 h-20 bg-blue-500 rounded-full flex items-center justify-center hover:bg-blue-600 transition-colors"
-              >
-                {isRecording && (
-                  <>
-                    <span className="absolute w-full h-full bg-blue-400 rounded-full voice-ripple" />
-                    <span className="absolute w-full h-full bg-blue-300 rounded-full voice-ripple delay-100" />
-                  </>
-                )}
-                <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clipRule="evenodd" />
-                </svg>
-              </button>
-              <button
-                onClick={() => setInputMode('text')}
-                className="mt-6 flex items-center gap-2 mx-auto text-gray-400 hover:text-gray-600 text-sm"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                </svg>
-                切换到键盘输入
-              </button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-4">
-              <input
-                type="text"
-                placeholder="输入你的问题..."
-                className="flex-1 px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:border-blue-400"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    onStartChat();
-                  }
-                }}
-              />
-              <button
-                onClick={() => onStartChat()}
-                className="px-6 py-3 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-colors"
-              >
-                发送
-              </button>
-              <button
-                onClick={() => setInputMode('voice')}
-                className="p-3 text-gray-400 hover:text-gray-600"
-              >
-                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clipRule="evenodd" />
-                </svg>
-              </button>
-            </div>
-          )}
+          <div className="flex items-center gap-4">
+            <input
+              type="text"
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              placeholder="输入你的问题，按 Enter 开始分析..."
+              className="flex-1 px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:border-blue-400"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && inputValue.trim()) {
+                  onStartChat(undefined, inputValue.trim());
+                  setInputValue('');
+                }
+              }}
+            />
+            <button
+              onClick={() => {
+                if (inputValue.trim()) {
+                  onStartChat(undefined, inputValue.trim());
+                  setInputValue('');
+                }
+              }}
+              disabled={!inputValue.trim()}
+              className="px-6 py-3 bg-blue-500 text-white rounded-xl hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              发送
+            </button>
+          </div>
         </div>
 
         {/* Suggested Agents */}

@@ -116,8 +116,10 @@ def process_file(
             if pd.api.types.is_datetime64_any_dtype(df[col]):
                 df[col] = df[col].astype(str)
 
-        # 处理 NaN 值
-        df = df.where(pd.notnull(df), None)
+        # 处理 NaN/Inf 值 - 替换为 None 以便 JSON 序列化
+        import numpy as np
+        df = df.replace({pd.NaT: None, pd.NA: None, np.nan: None})
+        df = df.replace([np.inf, -np.inf], [None, None])
 
         # 导入数据
         df.to_sql(table_name, conn, index=False, if_exists='replace')

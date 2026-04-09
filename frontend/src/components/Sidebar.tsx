@@ -20,6 +20,7 @@ interface Conversation {
 
 const menuItems = [
   { id: 'chat', label: '对话', icon: MessageSquare },
+  { id: 'agents', label: '数据智能体', icon: Sparkles },
   { id: 'canvas', label: '画卷', icon: Palette },
   { id: 'dashboard', label: '仪表盘', icon: LayoutDashboard },
 ];

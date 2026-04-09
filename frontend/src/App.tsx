@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { Welcome } from './components/Welcome';
 import { AgentGrid } from './components/AgentGrid';
+import { AgentMarket } from './components/AgentMarket';
+import { SkillManager } from './components/SkillManager';
 import { DataSourceManager } from './components/DataSource';
 import { Chat } from './components/Chat';
 import { PlaceholderPage } from './components/PlaceholderPage';
@@ -13,9 +15,11 @@ const App: React.FC = () => {
     { id: '2', title: '销售分析' },
   ]);
   const [activeAgent, setActiveAgent] = useState<string | undefined>();
+  const [initialMessage, setInitialMessage] = useState<string | undefined>();
 
-  const handleStartChat = (agentId?: string) => {
+  const handleStartChat = (agentId?: string, message?: string) => {
     setActiveAgent(agentId);
+    setInitialMessage(message);
     setCurrentView('chat-active');
   };
 
@@ -36,13 +40,25 @@ const App: React.FC = () => {
         return (
           <Chat
             agentId={activeAgent}
-            onBack={() => setCurrentView('chat')}
+            initialMessage={initialMessage}
+            onBack={() => {
+              setCurrentView('chat');
+              setInitialMessage(undefined);
+            }}
           />
         );
       case 'agents':
         return (
-          <AgentGrid
+          <AgentMarket
             onSelectAgent={(agentId) => handleStartChat(agentId)}
+            onCreateAgent={() => setCurrentView('agent-create')}
+            onViewSkills={() => setCurrentView('skills')}
+          />
+        );
+      case 'skills':
+        return (
+          <SkillManager
+            onBack={() => setCurrentView('agents')}
           />
         );
       case 'data-source':

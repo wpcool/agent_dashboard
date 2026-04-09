@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base, SessionLocal
-from app.routers import chat, upload
+from app.routers import chat, upload, agents
 from app.models import Agent, DataSource
 import uuid
 import json
@@ -88,6 +88,16 @@ def init_sample_data_source():
 init_default_agent()
 init_sample_data_source()
 
+# 初始化 Phase 2 技能和智能体
+def init_phase2_agents():
+    try:
+        from app.services.agent_initializer import init_skills_and_agents
+        init_skills_and_agents()
+    except Exception as e:
+        print(f"Phase 2 init warning: {e}")
+
+init_phase2_agents()
+
 app = FastAPI(
     title="AskTable AI API",
     description="AI-powered data analysis platform",
@@ -106,6 +116,7 @@ app.add_middleware(
 # 注册路由
 app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
 app.include_router(upload.router, prefix="/api/v1", tags=["upload"])
+app.include_router(agents.router, prefix="/api/v1", tags=["agents"])
 
 
 @app.get("/health")

@@ -33,7 +33,8 @@ class AIEngine:
         question: str,
         schema: Dict[str, Any],
         resolved_time: Optional[Dict[str, Any]] = None,
-        context: Optional[str] = None
+        context: Optional[str] = None,
+        custom_system_prompt: Optional[str] = None
     ) -> SQLGenerationResult:
         """
         生成 SQL
@@ -43,12 +44,13 @@ class AIEngine:
             schema: 数据库 Schema 信息
             resolved_time: 已解析的时间表达式
             context: 对话上下文
+            custom_system_prompt: 自定义系统提示词（来自 Agent）
 
         Returns:
             SQLGenerationResult
         """
-        system_prompt = self._build_system_prompt(schema)
-        user_prompt = self._build_user_prompt(question, resolved_time, context)
+        system_prompt = custom_system_prompt or self._build_system_prompt(schema)
+        user_prompt = self._build_user_prompt(question, resolved_time, schema)
 
         try:
             response = self.client.messages.create(
@@ -110,7 +112,7 @@ class AIEngine:
         self,
         question: str,
         resolved_time: Optional[Dict[str, Any]] = None,
-        context: Optional[str] = None
+        schema: Optional[Dict[str, Any]] = None
     ) -> str:
         """构建用户提示词"""
 
@@ -121,8 +123,12 @@ class AIEngine:
             for expr, time_range in resolved_time.items():
                 prompt += f"  - {expr}: {time_range['start']} 至 {time_range['end']}\n"
 
-        if context:
-            prompt += f"\n对话上下文: {context}\n"
+        if schema:
+            prompt += f"\n数据库 Schema:\n"
+            for table in schema.get("tables", []):
+                prompt += f"\n表: {table['name']}\n"
+                for col in table.get("columns", []):
+                    prompt += f"  - {col['name']}: {col['type']}\n"
 
         prompt += "\n请生成 SQL 查询。"
 

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import create_engine, text
 
 from app.database import get_db
-from app.models import Conversation, Message, DataSource
+from app.models import Conversation, Message, DataSource, Agent
 from app.schemas.chat import (
     ChatRequest, ChatResponse, ChatMessageResponse,
     ConversationCreate, ConversationResponse, ConversationDetailResponse
@@ -15,6 +15,7 @@ from app.services.ai_engine import AIEngine
 from app.services.time_resolver import TimeResolver
 from app.services.query_executor import QueryExecutor
 from app.services.accuracy_guard import AccuracyGuard
+from app.services.agent_analysis_engine import AgentAnalysisEngine, TaskType
 from cryptography.fernet import Fernet
 import os
 import time
@@ -86,15 +87,19 @@ async def chat(
     完整流程：
     1. 保存用户消息
     2. 解析时间表达式
-    3. 生成 SQL
-    4. 执行查询
-    5. 解读结果
-    6. 返回响应
+    3. 获取数据源 Schema
+    4. 获取 Agent 系统提示词（如有）
+    5. 生成 SQL
+    6. SQL 完整性检查
+    7. 执行查询
+    8. 解读结果
+    9. 保存助手消息
+    10. 返回响应
     """
     # 获取或创建对话
     if req.conversation_id:
         conversation = db.query(Conversation).filter(
-            Conversation.id == req.conversation_id
+            Conversation.id == str(req.conversation_id)
         ).first()
         if not conversation:
             raise HTTPException(status_code=404, detail="对话不存在")
@@ -153,9 +158,14 @@ async def chat(
                     "end": time_range.end.isoformat()
                 }
 
-    # 3. 获取 Schema（使用默认数据源）
-    # TODO: 支持多数据源
-    data_source = db.query(DataSource).filter(DataSource.is_active == True).first()
+    # 3. 获取 Schema（使用指定的数据源或默认第一个）
+    if req.data_source_id:
+        data_source = db.query(DataSource).filter(
+            DataSource.id == req.data_source_id,
+            DataSource.is_active == True
+        ).first()
+    else:
+        data_source = db.query(DataSource).filter(DataSource.is_active == True).first()
     if not data_source:
         # 没有数据源，返回提示
         assistant_message = Message(
@@ -172,111 +182,235 @@ async def chat(
 
     schema = data_source.schema_cache or {"tables": []}
 
-    # 4. 生成 SQL
-    sql_result = await ai_engine.generate_sql(
-        question=req.message,
-        schema=schema,
-        resolved_time=resolved_time
-    )
+    # 4. 获取 Agent 信息（如果提供了 agent_id）
+    agent = None
+    custom_system_prompt = None
+    if req.agent_id:
+        agent = db.query(Agent).filter(
+            Agent.id == str(req.agent_id),
+            Agent.is_active == True
+        ).first()
+        if agent:
+            custom_system_prompt = agent.get_system_prompt()
+            # 更新对话的当前智能体
+            conversation.current_agent_id = str(req.agent_id)
 
-    # 5. SQL 完整性检查
-    verification = accuracy_guard.verify_sql_completeness(sql_result.sql, req.message)
-    if not verification.is_valid:
-        sql_result.needs_verification = True
-        sql_result.explanation += f"\n\n注意：{', '.join(verification.issues)}"
+    # 5. 根据是否有 Agent 选择分析模式
+    # 如果有 Agent，使用智能多步骤分析；否则使用简单查询
+    if agent and req.agent_id:
+        # ===== 智能分析模式 =====
+        analysis_engine = AgentAnalysisEngine()
+        analysis_result = await analysis_engine.analyze(
+            question=req.message,
+            schema=schema,
+            data_source=data_source,
+            system_prompt=custom_system_prompt
+        )
 
-    # 6. 执行查询（如果需要）
-    query_result = None
-    results = None
-    explanation = sql_result.explanation
+        # 构建综合分析报告
+        final_sql = ""
+        all_results = []
 
-    if sql_result.sql and not sql_result.needs_verification:
-        try:
-            # 判断数据源类型，示例数据使用 SQLite 文件直接查询
-            if data_source.type == 'sqlite' and data_source.connection_options.get('is_sample'):
-                # 直接连接示例 SQLite 数据库执行查询
-                sample_engine = create_engine(f"sqlite:///{data_source.host}")
-                with sample_engine.connect() as conn:
-                    # 安全检查
-                    upper_sql = sql_result.sql.upper().strip()
-                    if not upper_sql.startswith('SELECT'):
-                        raise ValueError("不安全的 SQL：只允许 SELECT 查询")
+        # 收集所有步骤的 SQL 和结果
+        for step in analysis_result.plan.steps:
+            if step.sql:
+                final_sql += f"-- {step.description}\n{step.sql}\n\n"
+            if step.result and isinstance(step.result, dict) and "rows" in step.result:
+                all_results.extend(step.result["rows"][:5])  # 取前5行
 
-                    start_time = time.time()
-                    result = conn.execute(text(sql_result.sql))
-                    columns = list(result.keys())
-                    rows = []
-                    for row in result.fetchall():
-                        rows.append(dict(zip(columns, row)))
-                    execution_time = int((time.time() - start_time) * 1000)
+        # 构建回复内容
+        explanation = f"""### 📊 分析概览
 
-                    query_result = type('QueryResult', (), {
-                        'columns': columns,
-                        'rows': rows,
-                        'total_rows': len(rows),
-                        'execution_time_ms': execution_time,
-                        'sql': sql_result.sql
-                    })()
-                    results = rows
-            else:
-                # 使用 QueryExecutor 执行（其他数据源）
-                executor = QueryExecutor(db)
-                query_result = executor.execute(sql_result.sql)
-                results = query_result.rows
+{analysis_result.plan.user_intent}
 
-            # 结果一致性检查
-            consistency = accuracy_guard.verify_result_consistency(
-                query_result.columns,
-                query_result.rows
-            )
+### 🔍 分析过程
 
-            # 7. 解读结果
-            explanation = await ai_engine.interpret_results(
-                question=req.message,
-                sql=sql_result.sql,
-                results=results[:10],
-                total_rows=query_result.total_rows
-            )
+"""
+        for i, step in enumerate(analysis_result.plan.steps, 1):
+            explanation += f"**步骤 {i}**: {step.description}\n"
+            explanation += f"- 目的: {step.purpose}\n"
+            if step.insight:
+                explanation += f"- 发现: {step.insight[:200]}...\n"
+            explanation += "\n"
 
-            if consistency.warnings:
-                explanation += f"\n\n注意：{'; '.join(consistency.warnings)}"
+        explanation += f"""### 📈 综合结论
 
-        except Exception as e:
-            explanation = f"查询执行失败：{str(e)}"
+{analysis_result.final_analysis}
+
+### 💡 行动建议
+
+"""
+        for i, rec in enumerate(analysis_result.recommendations, 1):
+            explanation += f"{i}. {rec}\n"
+
+        explanation += f"\n---\n*分析置信度: {analysis_result.confidence:.0%}*"
+
+        # 保存助手消息
+        execution_metadata = {
+            "analysis_mode": "intelligent",
+            "agent_id": str(req.agent_id),
+            "agent_name": agent.name,
+            "task_type": analysis_result.plan.task_type.value,
+            "user_intent": analysis_result.plan.user_intent,
+            "analysis_strategy": analysis_result.plan.overall_strategy,
+            "steps_completed": analysis_result.steps_completed,
+            "total_steps": len(analysis_result.plan.steps),
+            "steps_detail": [
+                {
+                    "description": step.description,
+                    "purpose": step.purpose,
+                    "sql": step.sql,
+                    "insight": step.insight,
+                    "validation": {
+                        "is_valid": step.validation.is_valid if step.validation else True,
+                        "errors": step.validation.errors if step.validation else [],
+                        "warnings": step.validation.warnings if step.validation else []
+                    } if step.validation else None
+                }
+                for step in analysis_result.plan.steps
+            ],
+            "validation_summary": {
+                "total_steps": len(analysis_result.plan.steps),
+                "steps_with_errors": sum(1 for s in analysis_result.plan.steps if s.validation and not s.validation.is_valid),
+                "steps_with_warnings": sum(1 for s in analysis_result.plan.steps if s.validation and s.validation.warnings)
+            },
+            "sql": final_sql,
+            "confidence": analysis_result.confidence,
+            "key_insights": analysis_result.data_points,
+            "recommendations": analysis_result.recommendations
+        }
+
+        assistant_message = Message(
+            id=str(uuid.uuid4()),
+            conversation_id=conversation.id,
+            role="assistant",
+            content=explanation,
+            content_type="analysis_report",
+            execution_metadata=execution_metadata
+        )
+        db.add(assistant_message)
+        db.commit()
+        db.refresh(assistant_message)
+
+        return ChatResponse(
+            message=ChatMessageResponse.model_validate(assistant_message),
+            sql=final_sql if final_sql else None,
+            results=all_results if all_results else None,
+            explanation=explanation,
+            needs_verification=analysis_result.confidence < 0.7
+        )
+
+    else:
+        # ===== 简单查询模式 =====
+        sql_result = await ai_engine.generate_sql(
+            question=req.message,
+            schema=schema,
+            resolved_time=resolved_time,
+            custom_system_prompt=custom_system_prompt
+        )
+
+        # 6. SQL 完整性检查
+        verification = accuracy_guard.verify_sql_completeness(sql_result.sql, req.message)
+        if not verification.is_valid:
             sql_result.needs_verification = True
+            sql_result.explanation += f"\n\n注意：{', '.join(verification.issues)}"
 
-    # 8. 保存助手消息
-    execution_metadata = {
-        "sql": sql_result.sql,
-        "confidence": sql_result.confidence,
-        "resolved_time": resolved_time,
-        "verification_issues": verification.issues if not verification.is_valid else [],
-        "query_result": {
-            "columns": query_result.columns if query_result else [],
-            "total_rows": query_result.total_rows if query_result else 0,
-            "execution_time_ms": query_result.execution_time_ms if query_result else 0
-        } if query_result else None
-    }
+        # 7. 执行查询（如果需要）
+        query_result = None
+        results = None
+        explanation = sql_result.explanation
 
-    assistant_message = Message(
-        id=str(uuid.uuid4()),
-        conversation_id=conversation.id,
-        role="assistant",
-        content=explanation,
-        content_type="text",
-        execution_metadata=execution_metadata
-    )
-    db.add(assistant_message)
-    db.commit()
-    db.refresh(assistant_message)
+        if sql_result.sql and not sql_result.needs_verification:
+            try:
+                # 判断数据源类型，SQLite 文件（包括示例和上传的）直接查询
+                if data_source.type == 'sqlite':
+                    # 直接连接 SQLite 数据库执行查询
+                    db_path = data_source.host
+                    # 确保是绝对路径
+                    if not os.path.isabs(db_path):
+                        db_path = os.path.abspath(db_path)
+                    sample_engine = create_engine(f"sqlite:///{db_path}")
+                    with sample_engine.connect() as conn:
+                        # 安全检查
+                        upper_sql = sql_result.sql.upper().strip()
+                        if not upper_sql.startswith('SELECT'):
+                            raise ValueError("不安全的 SQL：只允许 SELECT 查询")
 
-    return ChatResponse(
-        message=ChatMessageResponse.model_validate(assistant_message),
-        sql=sql_result.sql if sql_result.sql else None,
-        results=results,
-        explanation=explanation,
-        needs_verification=sql_result.needs_verification
-    )
+                        start_time = time.time()
+                        result = conn.execute(text(sql_result.sql))
+                        columns = list(result.keys())
+                        rows = []
+                        for row in result.fetchall():
+                            rows.append(dict(zip(columns, row)))
+                        execution_time = int((time.time() - start_time) * 1000)
+
+                        query_result = type('QueryResult', (), {
+                            'columns': columns,
+                            'rows': rows,
+                            'total_rows': len(rows),
+                            'execution_time_ms': execution_time,
+                            'sql': sql_result.sql
+                        })()
+                        results = rows
+                else:
+                    # 使用 QueryExecutor 执行（其他数据源）
+                    executor = QueryExecutor(db)
+                    query_result = executor.execute(sql_result.sql)
+                    results = query_result.rows
+
+                # 结果一致性检查
+                consistency = accuracy_guard.verify_result_consistency(
+                    query_result.columns,
+                    query_result.rows
+                )
+
+                # 8. 解读结果
+                explanation = await ai_engine.interpret_results(
+                    question=req.message,
+                    sql=sql_result.sql,
+                    results=results[:10],
+                    total_rows=query_result.total_rows
+                )
+
+                if consistency.warnings:
+                    explanation += f"\n\n注意：{'; '.join(consistency.warnings)}"
+
+            except Exception as e:
+                explanation = f"查询执行失败：{str(e)}"
+                sql_result.needs_verification = True
+
+        # 9. 保存助手消息
+        execution_metadata = {
+            "sql": sql_result.sql,
+            "confidence": sql_result.confidence,
+            "resolved_time": resolved_time,
+            "verification_issues": verification.issues if not verification.is_valid else [],
+            "query_result": {
+                "columns": query_result.columns if query_result else [],
+                "total_rows": query_result.total_rows if query_result else 0,
+                "execution_time_ms": query_result.execution_time_ms if query_result else 0
+            } if query_result else None
+        }
+
+        assistant_message = Message(
+            id=str(uuid.uuid4()),
+            conversation_id=conversation.id,
+            role="assistant",
+            content=explanation,
+            content_type="text",
+            execution_metadata=execution_metadata
+        )
+        db.add(assistant_message)
+        db.commit()
+        db.refresh(assistant_message)
+
+        return ChatResponse(
+            message=ChatMessageResponse.model_validate(assistant_message),
+            sql=sql_result.sql if sql_result.sql else None,
+            results=results,
+            explanation=explanation,
+            needs_verification=sql_result.needs_verification
+        )
 
 
 @router.get("/conversations", response_model=list[ConversationResponse])
@@ -392,7 +526,11 @@ def delete_data_source(
     source_id: str,
     db: Session = Depends(get_db)
 ):
-    """删除数据源（软删除）"""
+    """
+    删除数据源（软删除）
+    - 对于上传的 SQLite 文件，同时删除数据库文件
+    """
+    import os
     data_source = db.query(DataSource).filter(
         DataSource.id == source_id
     ).first()
@@ -400,7 +538,18 @@ def delete_data_source(
     if not data_source:
         raise HTTPException(status_code=404, detail="数据源不存在")
 
+    # 对于上传的 SQLite 文件，删除实际数据库文件
+    if data_source.type == "sqlite":
+        try:
+            if data_source.connection_options.get("is_uploaded"):
+                db_path = data_source.host
+                if os.path.exists(db_path):
+                    os.remove(db_path)
+                    print(f"Deleted database file: {db_path}")
+        except Exception as e:
+            print(f"Failed to delete database file: {e}")
+
     data_source.is_active = False
     db.commit()
 
-    return {"status": "success"}
+    return {"success": True, "message": "数据源已删除"}
