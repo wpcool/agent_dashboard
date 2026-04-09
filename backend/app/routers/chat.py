@@ -436,6 +436,12 @@ async def chat(
         )
 
 
+async def sse_yield(data: dict) -> str:
+    """包装 SSE 数据并刷新"""
+    await asyncio.sleep(0)  # 允许事件循环处理其他任务
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
 async def generate_stream_response(
     req: ChatRequest,
     db: Session
@@ -445,8 +451,14 @@ async def generate_stream_response(
 
     start_time = time.time()
 
+    async def send_event(event_type: str, **kwargs):
+        """发送事件并强制刷新"""
+        data = {'type': event_type, **kwargs}
+        await asyncio.sleep(0)
+        return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
     # 发送开始事件
-    yield f"data: {json.dumps({'type': 'start', 'timestamp': start_time}, ensure_ascii=False)}\n\n"
+    yield await send_event('start', timestamp=start_time)
 
     try:
         # 获取或创建对话

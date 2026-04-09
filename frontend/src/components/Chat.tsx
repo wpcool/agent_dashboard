@@ -176,7 +176,11 @@ export const Chat: React.FC<ChatProps> = ({ conversationId, agentId: _agentId, i
     setMessages((prev) => [...prev, tempAssistantMessage]);
 
     try {
-      const response = await fetch(`${(import.meta as any).env?.VITE_API_URL || 'http://localhost:8000'}/api/v1/chat/stream`, {
+      // 使用与 api client 相同的 baseURL
+      const baseURL = 'http://localhost:8001';
+      console.log('[Stream] Connecting to:', `${baseURL}/api/v1/chat/stream`);
+
+      const response = await fetch(`${baseURL}/api/v1/chat/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -190,6 +194,12 @@ export const Chat: React.FC<ChatProps> = ({ conversationId, agentId: _agentId, i
         }),
       });
 
+      console.log('[Stream] Response status:', response.status);
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
 
@@ -197,19 +207,29 @@ export const Chat: React.FC<ChatProps> = ({ conversationId, agentId: _agentId, i
         throw new Error('No response body');
       }
 
+      console.log('[Stream] Reader created, starting to read...');
+
       let finalMessage: Message | null = null;
 
+      let chunkCount = 0;
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          console.log('[Stream] Read complete, total chunks:', chunkCount);
+          break;
+        }
 
+        chunkCount++;
         const chunk = decoder.decode(value, { stream: true });
+        console.log('[Stream] Chunk', chunkCount, ':', chunk.substring(0, 200));
+
         const lines = chunk.split('\n\n');
 
         for (const line of lines) {
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6));
+              console.log('[Stream] Event type:', data.type);
 
               switch (data.type) {
                 case 'conversation_created':
