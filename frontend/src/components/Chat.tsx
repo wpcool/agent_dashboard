@@ -177,7 +177,7 @@ export const Chat: React.FC<ChatProps> = ({ conversationId, agentId: _agentId, i
 
     try {
       // 使用与 api client 相同的 baseURL
-      const baseURL = 'http://localhost:8001';
+      const baseURL = 'http://localhost:8000';
       console.log('[Stream] Connecting to:', `${baseURL}/api/v1/chat/stream`);
 
       const response = await fetch(`${baseURL}/api/v1/chat/stream`, {
