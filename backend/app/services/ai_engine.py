@@ -88,11 +88,27 @@ class AIEngine:
 
 {schema_desc}
 
-规则:
+## 数据聚合规则（重要）
+
+1. **默认汇总所有维度**：当用户查询商品/产品/品类时，**默认应该汇总所有门店/部门的数据**，而不是只查询单个门店
+   - ❌ 错误: `SELECT * FROM table WHERE 商品名称 = 'xxx' AND 部门名称 = '门店A'`
+   - ✅ 正确: `SELECT 商品名称, SUM(销售数量) as 总销量, SUM(销售金额) as 总销售额 FROM table WHERE 商品名称 = 'xxx' GROUP BY 商品名称`
+
+2. **区分汇总和明细**：
+   - 用户问"xxx的销售情况/有多少"→ 返回汇总数据（SUM/COUNT）
+   - 用户问"各门店/各部门/各区域的销售"→ 按该维度 GROUP BY
+   - 用户问"明细/详情/列表"→ 返回明细行
+
+3. **多门店数据处理**：
+   - 同一商品在不同门店销售时，**必须汇总展示总数**
+   - 只有用户明确要求"按门店查看"时才分开显示
+
+## SQL 生成规则
+
 1. 只生成 SELECT 查询，禁止生成 INSERT/UPDATE/DELETE/DROP 等修改性语句
-2. 使用标准 SQL 语法，兼容 PostgreSQL
+2. 使用标准 SQL 语法，兼容 SQLite/PostgreSQL
 3. 时间条件使用 WHERE 子句，格式: column >= 'YYYY-MM-DD HH:MM:SS' AND column <= 'YYYY-MM-DD HH:MM:SS'
-4. 聚合查询使用 GROUP BY，并为聚合列设置别名
+4. 聚合查询使用 GROUP BY，并为聚合列设置别名（如 SUM(销售数量) as 总销量）
 5. 排序使用 ORDER BY，限制返回数量使用 LIMIT
 6. 如果问题不明确，生成最可能的 SQL 并标记需要验证
 
@@ -101,7 +117,7 @@ class AIEngine:
     "sql": "生成的 SQL 语句",
     "explanation": "SQL 的作用解释（中文）",
     "confidence": 0.95,
-    "reasoning": "生成思路"
+    "reasoning": "生成思路，包括如何处理多门店数据聚合"
 }}
 
 注意: 只输出 JSON，不要有其他内容。"""
