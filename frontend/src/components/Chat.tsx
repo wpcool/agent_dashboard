@@ -217,6 +217,7 @@ export const Chat: React.FC<ChatProps> = ({ conversationId, agentId: _agentId, i
                   break;
 
                 case 'mode':
+                  console.log('[SSE] mode:', data.mode);
                   setStreamingMessage((prev) =>
                     prev
                       ? {
@@ -226,6 +227,31 @@ export const Chat: React.FC<ChatProps> = ({ conversationId, agentId: _agentId, i
                         }
                       : null
                   );
+                  break;
+
+                case 'status':
+                  // 显示状态更新
+                  console.log('[SSE] status:', data.message);
+                  setStreamingMessage((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          content: data.message,
+                        }
+                      : null
+                  );
+                  // 为简单查询模式添加伪步骤
+                  if (data.message?.includes('生成SQL') || data.message?.includes('分析')) {
+                    setStreamingSteps((prev) => {
+                      const stepNum = prev.length + 1;
+                      if (prev.some(s => s.description === data.message)) return prev;
+                      return [...prev, {
+                        step_number: stepNum,
+                        description: data.message,
+                        status: 'running'
+                      }];
+                    });
+                  }
                   break;
 
                 case 'plan_complete':

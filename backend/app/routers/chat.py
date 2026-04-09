@@ -581,20 +581,26 @@ async def generate_stream_response(
             yield f"data: {json.dumps({'type': 'complete', 'message': final_analysis["analysis"], 'recommendations': final_analysis["recommendations"], 'confidence': final_analysis["confidence"], 'execution_time': time.time() - start_time}, ensure_ascii=False)}\n\n"
 
         else:
-            # 简单查询模式
+            # 简单查询模式 - 也提供流式步骤
             yield f"data: {json.dumps({'type': 'mode', 'mode': 'simple'}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'status', 'message': '正在生成SQL...'}, ensure_ascii=False)}\n\n"
 
+            # 步骤1: 理解问题
+            yield f"data: {json.dumps({'type': 'step_start', 'step_number': 1, 'description': '理解查询意图'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'step_complete', 'step_number': 1}, ensure_ascii=False)}\n\n"
+
+            # 步骤2: 生成SQL
+            yield f"data: {json.dumps({'type': 'step_start', 'step_number': 2, 'description': '生成SQL查询'}, ensure_ascii=False)}\n\n"
             ai_engine = AIEngine()
             sql_result = await ai_engine.generate_sql(
                 question=req.message,
                 schema=schema,
                 custom_system_prompt=agent.get_system_prompt() if agent else None
             )
-
             yield f"data: {json.dumps({'type': 'sql_generated', 'sql': sql_result.sql}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'step_complete', 'step_number': 2}, ensure_ascii=False)}\n\n"
 
-            # 执行查询
+            # 步骤3: 执行查询
+            yield f"data: {json.dumps({'type': 'step_start', 'step_number': 3, 'description': '执行数据库查询'}, ensure_ascii=False)}\n\n"
             results = None
             if sql_result.sql:
                 try:
@@ -609,18 +615,19 @@ async def generate_stream_response(
                             rows = [dict(zip(columns, row)) for row in result.fetchall()]
                             results = rows
                             yield f"data: {json.dumps({'type': 'data', 'row_count': len(rows), 'columns': columns}, ensure_ascii=False)}\n\n"
-                    else:
-                        yield f"data: {json.dumps({'type': 'status', 'message': '执行查询...'}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'type': 'step_complete', 'step_number': 3}, ensure_ascii=False)}\n\n"
                 except Exception as e:
-                    yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'type': 'step_error', 'step_number': 3, 'error': str(e)}, ensure_ascii=False)}\n\n"
 
-            # 解读结果
-            yield f"data: {json.dumps({'type': 'status', 'message': '正在解读结果...'}, ensure_ascii=False)}\n\n"
+            # 步骤4: 解读结果
+            yield f"data: {json.dumps({'type': 'step_start', 'step_number': 4, 'description': '解读分析结果'}, ensure_ascii=False)}\n\n"
             explanation = sql_result.explanation
             if results:
                 explanation = await ai_engine.interpret_results(
                     req.message, sql_result.sql, results[:10], len(results)
                 )
+
+            yield f"data: {json.dumps({'type': 'step_complete', 'step_number': 4}, ensure_ascii=False)}\n\n"
 
             # 保存消息
             assistant_message = Message(
