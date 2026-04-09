@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { api } from '../api/client';
 import { ChartView } from './ChartView';
-import { Send, Loader2, AlertTriangle, Database, BarChart3, Table, ChevronLeft, Copy, Check, Sparkles, Lightbulb, ShieldCheck, ShieldAlert } from 'lucide-react';
+import { Send, Loader2, AlertTriangle, Database, BarChart3, Table, ChevronLeft, Copy, Check, Sparkles, Lightbulb, ShieldCheck, ShieldAlert, Radio, Wifi } from 'lucide-react';
 
 interface DataSource {
   id: string;
@@ -56,6 +56,9 @@ export const Chat: React.FC<ChatProps> = ({ conversationId, agentId: _agentId, i
   const [currentConversationId, setCurrentConversationId] = useState<string | undefined>(conversationId);
   const [showChart, setShowChart] = useState<Record<string, boolean>>({});
   const [copied, setCopied] = useState<string | null>(null);
+  const [streamingMessage, setStreamingMessage] = useState<Message | null>(null);
+  const [streamingSteps, setStreamingSteps] = useState<{step_number: number, description: string, status: 'running' | 'complete' | 'error'}[]>([]);
+  const [useStreaming, setUseStreaming] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const initialMessageSent = useRef(false);
 
@@ -112,16 +115,232 @@ export const Chat: React.FC<ChatProps> = ({ conversationId, agentId: _agentId, i
     scrollToBottom();
   }, [messages]);
 
+  // 加载历史消息
   useEffect(() => {
     if (currentConversationId) {
-      // TODO: 加载历史消息
+      fetchConversationHistory(currentConversationId);
     }
   }, [currentConversationId]);
+
+  const fetchConversationHistory = async (convId: string) => {
+    try {
+      const response = await api.get(`/api/v1/conversations/${convId}/messages`);
+      const historyMessages: Message[] = response.data.map((msg: any) => ({
+        id: msg.id,
+        role: msg.role,
+        content: msg.content,
+        contentType: msg.content_type,
+        sql: msg.execution_metadata?.sql,
+        results: msg.execution_metadata?.query_result?.rows,
+        needsVerification: msg.execution_metadata?.needs_verification,
+        analysisMode: msg.content_type === 'analysis_report',
+        agentName: msg.execution_metadata?.agent_name,
+        analysisSteps: msg.execution_metadata?.steps_detail,
+        stepsCompleted: msg.execution_metadata?.steps_completed,
+        totalSteps: msg.execution_metadata?.total_steps,
+        recommendations: msg.execution_metadata?.recommendations,
+        confidence: msg.execution_metadata?.confidence,
+        validationSummary: msg.execution_metadata?.validation_summary,
+      }));
+      setMessages(historyMessages);
+    } catch (error) {
+      console.error('Failed to load conversation history:', error);
+    }
+  };
+
+  // 流式发送消息
+  const handleSendMessageStream = async (messageToSend: string) => {
+    if (!messageToSend.trim() || isLoading) return;
+
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: messageToSend,
+    };
+
+    setMessages((prev) => [...prev, userMessage]);
+    setInput('');
+    setIsLoading(true);
+    setStreamingSteps([]);
+
+    // 创建临时的助手消息
+    const tempAssistantId = (Date.now() + 1).toString();
+    const tempAssistantMessage: Message = {
+      id: tempAssistantId,
+      role: 'assistant',
+      content: '正在分析...',
+      analysisMode: currentAgent ? true : false,
+      agentName: currentAgent?.name,
+    };
+    setStreamingMessage(tempAssistantMessage);
+    setMessages((prev) => [...prev, tempAssistantMessage]);
+
+    try {
+      const response = await fetch(`${(import.meta as any).env?.VITE_API_URL || 'http://localhost:8000'}/api/v1/chat/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
+        },
+        body: JSON.stringify({
+          message: messageToSend,
+          conversation_id: currentConversationId,
+          data_source_id: selectedDataSource || undefined,
+          agent_id: currentAgent?.id || undefined,
+        }),
+      });
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (!reader) {
+        throw new Error('No response body');
+      }
+
+      let finalMessage: Message | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+
+              switch (data.type) {
+                case 'conversation_created':
+                  setCurrentConversationId(data.conversation_id);
+                  break;
+
+                case 'mode':
+                  setStreamingMessage((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          analysisMode: data.mode === 'intelligent',
+                          agentName: data.agent_name,
+                        }
+                      : null
+                  );
+                  break;
+
+                case 'plan_complete':
+                  setStreamingMessage((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          totalSteps: data.total_steps,
+                          stepsCompleted: 0,
+                        }
+                      : null
+                  );
+                  break;
+
+                case 'step_start':
+                  setStreamingSteps((prev) => [
+                    ...prev,
+                    {
+                      step_number: data.step_number || 1,
+                      description: data.description || data.message,
+                      status: 'running',
+                    },
+                  ]);
+                  break;
+
+                case 'step_progress':
+                  // 更新步骤状态
+                  break;
+
+                case 'step_complete':
+                  setStreamingSteps((prev) =>
+                    prev.map((s) =>
+                      s.step_number === data.step_number ? { ...s, status: 'complete' } : s
+                    )
+                  );
+                  break;
+
+                case 'data':
+                  setStreamingMessage((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          content: `查询完成，返回 ${data.row_count} 条数据`,
+                        }
+                      : null
+                  );
+                  break;
+
+                case 'complete':
+                  finalMessage = {
+                    id: tempAssistantId,
+                    role: 'assistant',
+                    content: data.message,
+                    contentType: data.recommendations ? 'analysis_report' : 'text',
+                    sql: data.sql,
+                    results: data.results,
+                    analysisMode: !!data.recommendations,
+                    agentName: currentAgent?.name,
+                    stepsCompleted: streamingSteps.filter((s) => s.status === 'complete').length,
+                    totalSteps: streamingSteps.length,
+                    recommendations: data.recommendations,
+                    confidence: data.confidence,
+                  };
+
+                  // 更新最终消息
+                  setMessages((prev) =>
+                    prev.map((m) => (m.id === tempAssistantId ? finalMessage! : m))
+                  );
+                  setStreamingMessage(null);
+                  break;
+
+                case 'error':
+                  setStreamingMessage((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          content: `处理失败: ${data.message}`,
+                        }
+                      : null
+                  );
+                  break;
+              }
+            } catch (e) {
+              console.error('Failed to parse SSE data:', e);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Stream error:', error);
+      setStreamingMessage((prev) =>
+        prev
+          ? {
+              ...prev,
+              content: '抱歉，处理请求时出错，请稍后重试。',
+            }
+          : null
+      );
+    } finally {
+      setIsLoading(false);
+      setStreamingMessage(null);
+    }
+  };
 
   // 处理发送消息的内部函数
   const handleSendMessage = async (messageToSend: string) => {
     if (!messageToSend.trim() || isLoading) return;
 
+    // 流式模式
+    if (useStreaming) {
+      await handleSendMessageStream(messageToSend);
+      return;
+    }
+
+    // 非流式模式（原逻辑）
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
@@ -280,7 +499,15 @@ export const Chat: React.FC<ChatProps> = ({ conversationId, agentId: _agentId, i
           )}
           <div>
             <h2 className="font-semibold text-gray-800">新对话</h2>
-            <p className="text-sm text-gray-400">{currentAgent?.name || '通用数据分析师'}</p>
+            <div className="flex items-center gap-2">
+              <p className="text-sm text-gray-400">{currentAgent?.name || '通用数据分析师'}</p>
+              {useStreaming && (
+                <span className="flex items-center gap-1 text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
+                  <Radio className="w-3 h-3" />
+                  实时
+                </span>
+              )}
+            </div>
           </div>
           {/* 数据源选择器 */}
           {dataSources.length > 0 && (
@@ -300,9 +527,23 @@ export const Chat: React.FC<ChatProps> = ({ conversationId, agentId: _agentId, i
             </div>
           )}
         </div>
-        <button className="p-2 text-gray-400 hover:text-gray-600 transition-colors">
-          <BarChart3 className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setUseStreaming(!useStreaming)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${
+              useStreaming
+                ? 'bg-green-50 text-green-600 hover:bg-green-100'
+                : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+            }`}
+            title={useStreaming ? '实时流式输出已开启' : '点击开启实时流式输出'}
+          >
+            {useStreaming ? <Radio className="w-4 h-4" /> : <Wifi className="w-4 h-4" />}
+            {useStreaming ? '实时' : '批量'}
+          </button>
+          <button className="p-2 text-gray-400 hover:text-gray-600 transition-colors">
+            <BarChart3 className="w-5 h-5" />
+          </button>
+        </div>
       </div>
 
       {/* Messages */}
@@ -350,6 +591,40 @@ export const Chat: React.FC<ChatProps> = ({ conversationId, agentId: _agentId, i
                   }`}
                 >
                   <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
+
+                  {/* 流式传输状态 */}
+                  {streamingMessage?.id === message.id && streamingSteps.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      <div className="flex items-center gap-2 text-sm text-blue-600">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>分析进行中...</span>
+                      </div>
+                      <div className="space-y-1">
+                        {streamingSteps.map((step) => (
+                          <div
+                            key={step.step_number}
+                            className={`flex items-center gap-2 text-sm px-3 py-1.5 rounded ${
+                              step.status === 'running'
+                                ? 'bg-blue-50 text-blue-700'
+                                : step.status === 'complete'
+                                ? 'bg-green-50 text-green-700'
+                                : 'bg-red-50 text-red-700'
+                            }`}
+                          >
+                            {step.status === 'running' ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : step.status === 'complete' ? (
+                              <Check className="w-3 h-3" />
+                            ) : (
+                              <AlertTriangle className="w-3 h-3" />
+                            )}
+                            <span className="font-medium">步骤 {step.step_number}:</span>
+                            <span className="truncate">{step.description}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* 智能分析模式标识 */}
                   {message.analysisMode && (

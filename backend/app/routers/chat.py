@@ -1,6 +1,9 @@
 import uuid
-from typing import Optional
+import json
+import asyncio
+from typing import Optional, AsyncGenerator
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import create_engine, text
 
@@ -65,7 +68,7 @@ def get_conversation(
     conversation_id: str,
     db: Session = Depends(get_db)
 ):
-    """获取对话详情"""
+    """获取对话详情（包含消息列表）"""
     conversation = db.query(Conversation).filter(
         Conversation.id == conversation_id
     ).first()
@@ -74,6 +77,26 @@ def get_conversation(
         raise HTTPException(status_code=404, detail="对话不存在")
 
     return conversation
+
+
+@router.get("/conversations/{conversation_id}/messages", response_model=list[ChatMessageResponse])
+def get_conversation_messages(
+    conversation_id: str,
+    db: Session = Depends(get_db)
+):
+    """获取对话的消息列表"""
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id
+    ).first()
+
+    if not conversation:
+        raise HTTPException(status_code=404, detail="对话不存在")
+
+    messages = db.query(Message).filter(
+        Message.conversation_id == conversation_id
+    ).order_by(Message.created_at.asc()).all()
+
+    return messages
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -411,6 +434,233 @@ async def chat(
             explanation=explanation,
             needs_verification=sql_result.needs_verification
         )
+
+
+async def generate_stream_response(
+    req: ChatRequest,
+    db: Session
+) -> AsyncGenerator[str, None]:
+    """生成流式响应"""
+    import time
+
+    start_time = time.time()
+
+    # 发送开始事件
+    yield f"data: {json.dumps({'type': 'start', 'timestamp': start_time}, ensure_ascii=False)}\n\n"
+
+    try:
+        # 获取或创建对话
+        if req.conversation_id:
+            conversation = db.query(Conversation).filter(
+                Conversation.id == str(req.conversation_id)
+            ).first()
+            if not conversation:
+                yield f"data: {json.dumps({'type': 'error', 'message': '对话不存在'}, ensure_ascii=False)}\n\n"
+                return
+        else:
+            conversation = Conversation(
+                id=str(uuid.uuid4()),
+                user_id=str(uuid.uuid4()),
+                title=req.message[:20] + "..."
+            )
+            db.add(conversation)
+            db.commit()
+            yield f"data: {json.dumps({'type': 'conversation_created', 'conversation_id': conversation.id}, ensure_ascii=False)}\n\n"
+
+        # 保存用户消息
+        user_message = Message(
+            id=str(uuid.uuid4()),
+            conversation_id=conversation.id,
+            role="user",
+            content=req.message
+        )
+        db.add(user_message)
+        db.commit()
+
+        # 发送用户消息确认
+        yield f"data: {json.dumps({'type': 'user_message_saved', 'message_id': user_message.id}, ensure_ascii=False)}\n\n"
+
+        # 初始化分析阶段
+        yield f"data: {json.dumps({'type': 'status', 'message': '正在分析问题...'}, ensure_ascii=False)}\n\n"
+
+        # 获取数据源和 Agent
+        data_source = db.query(DataSource).filter(DataSource.is_active == True).first()
+        if not data_source:
+            yield f"data: {json.dumps({'type': 'error', 'message': '请先配置数据源'}, ensure_ascii=False)}\n\n"
+            return
+
+        agent = None
+        if req.agent_id:
+            agent = db.query(Agent).filter(
+                Agent.id == str(req.agent_id),
+                Agent.is_active == True
+            ).first()
+
+        schema = data_source.schema_cache or {"tables": []}
+
+        # 流式分析过程
+        if agent and req.agent_id:
+            # 智能分析模式 - 流式展示步骤
+            yield f"data: {json.dumps({'type': 'mode', 'mode': 'intelligent', 'agent_name': agent.name}, ensure_ascii=False)}\n\n"
+
+            analysis_engine = AgentAnalysisEngine()
+
+            # 创建分析计划
+            yield f"data: {json.dumps({'type': 'step_start', 'step': 'planning', 'message': '正在制定分析计划...'}, ensure_ascii=False)}\n\n"
+
+            plan = await analysis_engine._create_analysis_plan(
+                req.message, schema, agent.get_system_prompt() if agent else None
+            )
+
+            yield f"data: {json.dumps({'type': 'plan_complete', 'task_type': plan.task_type.value, 'user_intent': plan.user_intent, 'total_steps': len(plan.steps)}, ensure_ascii=False)}\n\n"
+
+            # 执行每个步骤并流式输出
+            for i, step in enumerate(plan.steps):
+                step_num = i + 1
+                yield f"data: {json.dumps({'type': 'step_start', 'step_number': step_num, 'total_steps': len(plan.steps), 'description': step.description}, ensure_ascii=False)}\n\n"
+
+                # 生成/验证 SQL
+                if not step.sql:
+                    yield f"data: {json.dumps({'type': 'step_progress', 'step_number': step_num, 'message': '正在生成查询...'}, ensure_ascii=False)}\n\n"
+                    step.sql = await analysis_engine._generate_step_sql(step, schema, plan)
+
+                # Schema 验证
+                validation = analysis_engine._validate_sql_schema(step.sql, schema)
+                if not validation.is_valid:
+                    yield f"data: {json.dumps({'type': 'step_progress', 'step_number': step_num, 'message': '正在修正查询...', 'warnings': validation.errors}, ensure_ascii=False)}\n\n"
+                    step.sql = await analysis_engine._fix_sql_schema(step.sql, schema, validation.errors, plan)
+
+                # 执行查询
+                yield f"data: {json.dumps({'type': 'step_progress', 'step_number': step_num, 'message': '正在执行查询...'}, ensure_ascii=False)}\n\n"
+
+                try:
+                    if data_source.type == 'sqlite':
+                        step.result = analysis_engine._execute_sqlite_query(step.sql, data_source.host)
+                    else:
+                        step.result = analysis_engine._execute_db_query(step.sql, data_source)
+
+                    yield f"data: {json.dumps({'type': 'step_data', 'step_number': step_num, 'row_count': step.result.get('total_rows', 0)}, ensure_ascii=False)}\n\n"
+
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'step_error', 'step_number': step_num, 'error': str(e)}, ensure_ascii=False)}\n\n"
+                    continue
+
+                # 分析结果
+                yield f"data: {json.dumps({'type': 'step_progress', 'step_number': step_num, 'message': '正在分析结果...'}, ensure_ascii=False)}\n\n"
+                step.insight = await analysis_engine._analyze_step_result(step, plan)
+
+                yield f"data: {json.dumps({'type': 'step_complete', 'step_number': step_num, 'insight': step.insight[:200]}, ensure_ascii=False)}\n\n"
+
+            # 综合分析
+            yield f"data: {json.dumps({'type': 'status', 'message': '正在生成综合分析...'}, ensure_ascii=False)}\n\n"
+            final_analysis = await analysis_engine._synthesize_analysis(plan, req.message)
+
+            # 保存助手消息
+            assistant_message = Message(
+                id=str(uuid.uuid4()),
+                conversation_id=conversation.id,
+                role="assistant",
+                content=final_analysis["analysis"],
+                content_type="analysis_report",
+                execution_metadata={
+                    "analysis_mode": "intelligent",
+                    "agent_id": str(req.agent_id) if req.agent_id else None,
+                    "agent_name": agent.name if agent else None,
+                    "task_type": plan.task_type.value,
+                    "steps_completed": len([s for s in plan.steps if s.result]),
+                    "total_steps": len(plan.steps),
+                    "steps_detail": [{"description": s.description, "purpose": s.purpose, "sql": s.sql, "insight": s.insight} for s in plan.steps],
+                    "recommendations": final_analysis["recommendations"],
+                    "confidence": final_analysis["confidence"]
+                }
+            )
+            db.add(assistant_message)
+            db.commit()
+
+            # 发送最终结果
+            yield f"data: {json.dumps({'type': 'complete', 'message': final_analysis["analysis"], 'recommendations': final_analysis["recommendations"], 'confidence': final_analysis["confidence"], 'execution_time': time.time() - start_time}, ensure_ascii=False)}\n\n"
+
+        else:
+            # 简单查询模式
+            yield f"data: {json.dumps({'type': 'mode', 'mode': 'simple'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': '正在生成SQL...'}, ensure_ascii=False)}\n\n"
+
+            ai_engine = AIEngine()
+            sql_result = await ai_engine.generate_sql(
+                question=req.message,
+                schema=schema,
+                custom_system_prompt=agent.get_system_prompt() if agent else None
+            )
+
+            yield f"data: {json.dumps({'type': 'sql_generated', 'sql': sql_result.sql}, ensure_ascii=False)}\n\n"
+
+            # 执行查询
+            results = None
+            if sql_result.sql:
+                try:
+                    if data_source.type == 'sqlite':
+                        db_path = data_source.host
+                        if not os.path.isabs(db_path):
+                            db_path = os.path.abspath(db_path)
+                        engine = create_engine(f"sqlite:///{db_path}")
+                        with engine.connect() as conn:
+                            result = conn.execute(text(sql_result.sql))
+                            columns = list(result.keys())
+                            rows = [dict(zip(columns, row)) for row in result.fetchall()]
+                            results = rows
+                            yield f"data: {json.dumps({'type': 'data', 'row_count': len(rows), 'columns': columns}, ensure_ascii=False)}\n\n"
+                    else:
+                        yield f"data: {json.dumps({'type': 'status', 'message': '执行查询...'}, ensure_ascii=False)}\n\n"
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+            # 解读结果
+            yield f"data: {json.dumps({'type': 'status', 'message': '正在解读结果...'}, ensure_ascii=False)}\n\n"
+            explanation = sql_result.explanation
+            if results:
+                explanation = await ai_engine.interpret_results(
+                    req.message, sql_result.sql, results[:10], len(results)
+                )
+
+            # 保存消息
+            assistant_message = Message(
+                id=str(uuid.uuid4()),
+                conversation_id=conversation.id,
+                role="assistant",
+                content=explanation,
+                content_type="text",
+                execution_metadata={"sql": sql_result.sql}
+            )
+            db.add(assistant_message)
+            db.commit()
+
+            yield f"data: {json.dumps({'type': 'complete', 'message': explanation, 'sql': sql_result.sql, 'results': results[:10] if results else None, 'execution_time': time.time() - start_time}, ensure_ascii=False)}\n\n"
+
+    except Exception as e:
+        yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    finally:
+        yield f"data: {json.dumps({'type': 'end'}, ensure_ascii=False)}\n\n"
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    req: ChatRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    流式对话接口 - 使用 SSE (Server-Sent Events)
+    实时返回分析进度和结果
+    """
+    return StreamingResponse(
+        generate_stream_response(req, db),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"  # 禁用 Nginx 缓冲
+        }
+    )
 
 
 @router.get("/conversations", response_model=list[ConversationResponse])
