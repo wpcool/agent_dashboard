@@ -630,32 +630,48 @@ export const Chat: React.FC<ChatProps> = ({ conversationId, agentId: _agentId, i
 
                   {/* 流式传输状态 */}
                   {streamingMessage?.id === message.id && streamingSteps.length > 0 && (
-                    <div className="mt-3 space-y-2">
-                      <div className="flex items-center gap-2 text-sm text-blue-600">
+                    <div className="mt-4 border border-blue-200 rounded-xl bg-blue-50/50 p-4">
+                      <div className="flex items-center gap-2 text-sm font-medium text-blue-700 mb-3">
                         <Loader2 className="w-4 h-4 animate-spin" />
                         <span>分析进行中...</span>
+                        <span className="text-blue-500 ml-2">
+                          ({streamingSteps.filter(s => s.status === 'complete').length}/{streamingSteps.length})
+                        </span>
                       </div>
-                      <div className="space-y-1">
+                      <div className="space-y-2">
                         {streamingSteps.map((step) => (
                           <div
                             key={step.step_number}
-                            className={`flex items-center gap-2 text-sm px-3 py-1.5 rounded ${
+                            className={`flex items-center gap-3 text-sm px-3 py-2 rounded-lg border ${
                               step.status === 'running'
-                                ? 'bg-blue-50 text-blue-700'
+                                ? 'bg-white border-blue-300 shadow-sm'
                                 : step.status === 'complete'
-                                ? 'bg-green-50 text-green-700'
-                                : 'bg-red-50 text-red-700'
+                                ? 'bg-green-50/50 border-green-200 text-green-700'
+                                : 'bg-red-50/50 border-red-200 text-red-700'
                             }`}
                           >
-                            {step.status === 'running' ? (
-                              <Loader2 className="w-3 h-3 animate-spin" />
-                            ) : step.status === 'complete' ? (
-                              <Check className="w-3 h-3" />
-                            ) : (
-                              <AlertTriangle className="w-3 h-3" />
+                            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
+                              step.status === 'running'
+                                ? 'bg-blue-500 text-white'
+                                : step.status === 'complete'
+                                ? 'bg-green-500 text-white'
+                                : 'bg-red-500 text-white'
+                            }`}>
+                              {step.status === 'running' ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : step.status === 'complete' ? (
+                                <Check className="w-3 h-3" />
+                              ) : (
+                                <AlertTriangle className="w-3 h-3" />
+                              )}
+                            </div>
+                            <div className="flex-1">
+                              <span className="font-medium">步骤 {step.step_number}:</span>
+                              <span className="ml-2">{step.description}</span>
+                            </div>
+                            {step.status === 'running' && (
+                              <span className="text-xs text-blue-500 animate-pulse">进行中</span>
                             )}
-                            <span className="font-medium">步骤 {step.step_number}:</span>
-                            <span className="truncate">{step.description}</span>
                           </div>
                         ))}
                       </div>
