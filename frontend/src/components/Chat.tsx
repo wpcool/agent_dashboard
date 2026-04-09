@@ -241,14 +241,22 @@ export const Chat: React.FC<ChatProps> = ({ conversationId, agentId: _agentId, i
                   break;
 
                 case 'step_start':
-                  setStreamingSteps((prev) => [
-                    ...prev,
-                    {
-                      step_number: data.step_number || 1,
-                      description: data.description || data.message,
-                      status: 'running',
-                    },
-                  ]);
+                  const stepNum = Number(data.step_number || data.step || 1);
+                  console.log('[SSE] step_start:', stepNum, data.description);
+                  setStreamingSteps((prev) => {
+                    // 避免重复添加同一步骤
+                    if (prev.some(s => s.step_number === stepNum)) {
+                      return prev;
+                    }
+                    return [
+                      ...prev,
+                      {
+                        step_number: stepNum,
+                        description: data.description || data.message || '分析中...',
+                        status: 'running',
+                      },
+                    ];
+                  });
                   break;
 
                 case 'step_progress':
@@ -256,9 +264,11 @@ export const Chat: React.FC<ChatProps> = ({ conversationId, agentId: _agentId, i
                   break;
 
                 case 'step_complete':
+                  const completeStepNum = Number(data.step_number);
+                  console.log('[SSE] step_complete:', completeStepNum);
                   setStreamingSteps((prev) =>
                     prev.map((s) =>
-                      s.step_number === data.step_number ? { ...s, status: 'complete' } : s
+                      s.step_number === completeStepNum ? { ...s, status: 'complete' } : s
                     )
                   );
                   break;

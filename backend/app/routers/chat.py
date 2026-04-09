@@ -506,7 +506,7 @@ async def generate_stream_response(
             analysis_engine = AgentAnalysisEngine()
 
             # 创建分析计划
-            yield f"data: {json.dumps({'type': 'step_start', 'step': 'planning', 'message': '正在制定分析计划...'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': '正在制定分析计划...'}, ensure_ascii=False)}\n\n"
 
             plan = await analysis_engine._create_analysis_plan(
                 req.message, schema, agent.get_system_prompt() if agent else None
