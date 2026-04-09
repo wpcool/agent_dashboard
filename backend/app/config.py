@@ -14,10 +14,11 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
 
     # AI 配置
-    AI_MODEL: str = "qwen-max"
+    AI_MODEL: str = "qwen-plus"  # qwen-plus 支持深度思考
     AI_MAX_TOKENS: int = 4000
     AI_TEMPERATURE: float = 0.1
     QWEN_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    QWEN_ENABLE_THINKING: bool = True  # 启用 Qwen 思考模式
 
     # 查询配置
     QUERY_TIMEOUT: int = 30
